@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>HUSNI ATHIYAH - Particle Text AI</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        
+        #ui-guide {
+            position: absolute; top: 15px; left: 15px;
+            color: #00ffcc; background: rgba(0,0,0,0.7);
+            padding: 12px; border-radius: 8px; font-size: 11px;
+            border-left: 4px solid #ff007b; z-index: 5; line-height: 1.5;
+        }
+
+        #video-preview {
+            position: absolute; bottom: 15px; right: 15px;
+            width: 90px; height: 120px; border: 2px solid #ff007b;
+            border-radius: 8px; overflow: hidden; transform: scaleX(-1);
+            opacity: 0.7; background: #111;
+        }
+        video { width: 100%; height: 100%; object-fit: cover; }
+
+        #start-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100; color: white;
+        }
+        button {
+            padding: 15px 40px; font-size: 18px; background: #ff007b;
+            color: white; border: none; border-radius: 50px; cursor: pointer;
+            font-weight: bold; margin-top: 25px; box-shadow: 0 0 20px #ff007b;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen">
+        <h1 style="color: #ff007b; margin-bottom: 5px;">HUSNI ATHIYAH</h1>
+        <p style="opacity: 0.8;">Interactive Particle Text System</p>
+        <button onclick="startApp()">MULAI KAMERA</button>
+    </div>
+
+    <div id="ui-guide">
+        <b>Ganti Bentuk:</b> 🖐️ (Palm)<br>
+        <b>Ledakan:</b> 👌 (Pinch)<br>
+        <b>Partikel Teks 1:</b> 🤟 (Simbol Love)<br>
+        <b>Partikel Teks 2:</b> 🤞 (Pose Foto)
+    </div>
+
+    <div id="video-preview">
+        <video id="webcam" autoplay playsinline></video>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- KONFIGURASI ---
+        const PARTICLE_COUNT = 12000; // Jumlah partikel lebih banyak agar teks terbaca
+        let expansion = 0;
+        let targetExpansion = 0;
+        let hue = 0.6;
+        let lastShapeChange = 0;
+        let currentShapeIndex = 0;
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 6;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        const geometry = new THREE.BufferGeometry();
+        const posArray = new Float32Array(PARTICLE_COUNT * 3);
+        const targetArray = new Float32Array(PARTICLE_COUNT * 3);
+        const colorArray = new Float32Array(PARTICLE_COUNT * 3);
+
+        // --- GENERATOR BENTUK ---
+        function createSphere() {
+            const arr = new Float32Array(PARTICLE_COUNT * 3);
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const phi = Math.acos(-1 + (2 * i) / PARTICLE_COUNT);
+                const theta = Math.sqrt(PARTICLE_COUNT * Math.PI) * phi;
+                arr[i * 3] = 2.5 * Math.cos(theta) * Math.sin(phi);
+                arr[i * 3 + 1] = 2.5 * Math.sin(theta) * Math.sin(phi);
+                arr[i * 3 + 2] = 2.2 * Math.cos(phi);
+            }
+            return arr;
+        }
+
+        // Fungsi sampling teks menjadi koordinat 3D
+        function createTextShape(text, fontSize) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 1000;
+            canvas.height = 400;
+            
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${fontSize}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            const pixels = [];
+            for (let y = 0; y < canvas.height; y += 4) {
+                for (let x = 0; x < canvas.width; x += 4) {
+                    const alpha = imageData[(y * canvas.width + x) * 4 + 3];
+                    if (alpha > 128) {
+                        pixels.push({
+                            x: (x - canvas.width / 2) * 0.015,
+                            y: -(y - canvas.height / 2) * 0.015
+                        });
+                    }
+                }
+            }
+
+            const arr = new Float32Array(PARTICLE_COUNT * 3);
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const p = pixels[i % pixels.length];
+                arr[i * 3] = p.x;
+                arr[i * 3 + 1] = p.y;
+                arr[i * 3 + 2] = (Math.random() - 0.5) * 0.2;
+            }
+            return arr;
+        }
+
+        const shapeSphere = createSphere();
+        const shapeLoveText = createTextShape("I LOVE YOU", 140);
+        const shapeHusniText = createTextShape("HUSNI ATHIYAH", 110);
+        
+        targetArray.set(shapeSphere);
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+
+        const material = new THREE.PointsMaterial({ size: 0.025, vertexColors: true, blending: THREE.AdditiveBlending });
+        const points = new THREE.Points(geometry, material);
+        scene.add(points);
+
+        // --- SISTEM AI ---
+        window.startApp = function() {
+            document.getElementById('start-screen').style.display = 'none';
+            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5 });
+            hands.onResults(onResults);
+
+            const cameraFeed = new Camera(document.getElementById('webcam'), {
+                onFrame: async () => await hands.send({image: document.getElementById('webcam')}),
+                facingMode: 'user', width: 480, height: 640
+            });
+            cameraFeed.start();
+        }
+
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks[0]) {
+                const landmarks = results.multiHandLandmarks[0];
+                const fingerUp = (tip, mcp) => landmarks[tip].y < landmarks[mcp].y;
+
+                // Pinch Explosion
+                const distPinch = Math.hypot(landmarks[8].x - landmarks[4].x, landmarks[8].y - landmarks[4].y);
+                targetExpansion = distPinch < 0.05 ? 2.0 : 0;
+
+                // Gestur Recognition
+                const isThumbOut = Math.abs(landmarks[4].x - landmarks[2].x) > 0.1;
+                const isIndexUp = fingerUp(8, 6);
+                const isMiddleUp = fingerUp(12, 10);
+                const isLove = isIndexUp && fingerUp(20, 18) && fingerUp(4, 2) && !isMiddleUp;
+                const isHusniPose = isThumbOut && isIndexUp && isMiddleUp && !fingerUp(16, 14) && !fingerUp(20, 18);
+
+                if (isLove) {
+                    targetArray.set(shapeLoveText);
+                    hue = 0.95; // Pink
+                } else if (isHusniPose) {
+                    targetArray.set(shapeHusniText);
+                    hue = 0.55; // Cyan/Blue
+                } else {
+                    const isPalm = isIndexUp && isMiddleUp && fingerUp(16, 14) && fingerUp(20, 18);
+                    if (isPalm) {
+                        targetArray.set(shapeSphere);
+                        hue = 0.6;
+                    }
+                }
+
+                // Interaction Movement
+                points.position.x += ((0.5 - landmarks[9].x) * 4 - points.position.x) * 0.1;
+                points.position.y += ((0.5 - landmarks[9].y) * 4 - points.position.y) * 0.1;
+            }
+        }
+
+        // --- ANIMASI ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const pos = geometry.attributes.position.array;
+            const cols = geometry.attributes.color.array;
+            const colorObj = new THREE.Color().setHSL(hue, 0.8, 0.5);
+            
+            expansion += (targetExpansion - expansion) * 0.1;
+
+            for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+                // Smooth Morphing ke Target
+                pos[i] += (targetArray[i] - pos[i]) * 0.1;
+                
+                // Noise / Ledakan
+                pos[i] += (Math.random() - 0.5) * expansion;
+
+                // Warna
+                if (i % 3 === 0) {
+                    cols[i] = colorObj.r;
+                    cols[i+1] = colorObj.g;
+                    cols[i+2] = colorObj.b;
+                }
+            }
+            geometry.attributes.position.needsUpdate = true;
+            geometry.attributes.color.needsUpdate = true;
+            
+            points.rotation.y += 0.002;
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
